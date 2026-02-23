@@ -1,0 +1,21 @@
+{
+  "default_branch": "dev",
+  "branches": [
+    "dev",
+    "feat/setup-testing-ci-environment",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "dev": null,
+    "feat/setup-testing-ci-environment": "dev",
+    "main": "dev",
+    "origin": "dev"
+  },
+  "order": [
+    "dev",
+    "feat/setup-testing-ci-environment",
+    "main",
+    "origin"
+  ]
+}
