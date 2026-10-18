@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, XCircle, RotateCcw, Ban, ChevronDown, ChevronUp } from "lucide-react";
 import { MOCK_PAYROLL_RUNS } from "@/lib/api/mockData";
+import { resolveReconciliationStatus } from "@/lib/reconciliation/status";
+import { diagnosePayrollRunRetry } from "@/src/payroll/payoutRetryDiagnostics";
 import type { PayrollRun } from "@/types";
 
 type FailureGroup = {
@@ -12,7 +14,7 @@ type FailureGroup = {
 };
 
 function classifyFailure(run: PayrollRun): { key: string; label: string } {
-  if (run.reconciliationStatus === "failed") {
+  if (resolveReconciliationStatus(run) === "failed") {
     return { key: "reconciliation_failed", label: "Reconciliation failed" };
   }
   if (run.reconciliationDetails?.discrepancies?.length) {
@@ -26,13 +28,12 @@ function classifyFailure(run: PayrollRun): { key: string; label: string } {
 
 export default function PayrollFailureRecoveryCenter() {
   const [runs, setRuns] = useState<PayrollRun[]>(() =>
-    MOCK_PAYROLL_RUNS.filter(
-      (r) => r.status === "failed" || r.reconciliationStatus === "failed",
-    ),
+    MOCK_PAYROLL_RUNS.filter((r) => resolveReconciliationStatus(r) === "failed"),
   );
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [actionError, setActionError] = useState<string | null>(null);
+  const [retryAttempts, setRetryAttempts] = useState<Record<string, number>>({});
 
   const groups = useMemo<FailureGroup[]>(() => {
     const map = new Map<string, FailureGroup>();
@@ -63,6 +64,9 @@ export default function PayrollFailureRecoveryCenter() {
       setActionError(
         `Failed to ${status === "pending" ? "retry" : "cancel"} run ${runId}. Please try again.`,
       );
+      if (status === "pending") {
+        setRetryAttempts((prev) => ({ ...prev, [runId]: (prev[runId] ?? 0) + 1 }));
+      }
     } finally {
       setPendingAction(null);
     }
@@ -138,7 +142,11 @@ export default function PayrollFailureRecoveryCenter() {
 
               {isOpen && (
                 <ul className="space-y-2 border-t border-gray-100 p-4" aria-label={group.reasonLabel}>
-                  {group.runs.map((run) => (
+                  {group.runs.map((run) => {
+                    const diagnostics = diagnosePayrollRunRetry(run, {
+                      retryCount: retryAttempts[run.id] ?? 0,
+                    });
+                    return (
                     <li
                       key={run.id}
                       className="flex flex-col gap-2 rounded-md border border-gray-200 p-3 sm:flex-row sm:items-center sm:justify-between"
@@ -159,14 +167,45 @@ export default function PayrollFailureRecoveryCenter() {
                             {run.reconciliationDetails.discrepancies.join("; ")}
                           </p>
                         ) : null}
+
+                        {diagnostics.primary && (
+                          <div
+                            className={`mt-2 rounded-md border px-2.5 py-1.5 text-xs ${
+                              diagnostics.primary.severity === "blocker"
+                                ? "border-red-200 bg-red-50 text-red-800"
+                                : "border-amber-200 bg-amber-50 text-amber-900"
+                            }`}
+                            data-testid={`retry-diagnostic-${run.id}`}
+                          >
+                            <span className="font-medium">{diagnostics.primary.title}.</span>{" "}
+                            {diagnostics.primary.message}
+                            {diagnostics.primary.remediation.href && (
+                              <a
+                                href={diagnostics.primary.remediation.href}
+                                className="ml-1 font-medium underline"
+                              >
+                                {diagnostics.primary.remediation.label}
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        <p
+                          className="mt-1 text-[11px] text-gray-500"
+                          data-testid={`retry-summary-${run.id}`}
+                        >
+                          {diagnostics.summary}
+                        </p>
                       </div>
 
                       <div className="flex shrink-0 items-center gap-2">
                         <button
                           type="button"
-                          disabled={pendingAction === run.id + "pending"}
+                          disabled={
+                            pendingAction === run.id + "pending" || !diagnostics.canRetry
+                          }
+                          title={diagnostics.canRetry ? undefined : diagnostics.summary}
                           onClick={() => updateStatus(run.id, "pending")}
-                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <RotateCcw className="h-3 w-3" aria-hidden />
                           {pendingAction === run.id + "pending" ? "Retrying…" : "Retry"}
@@ -182,7 +221,8 @@ export default function PayrollFailureRecoveryCenter() {
                         </button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>
